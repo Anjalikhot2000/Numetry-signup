@@ -2,10 +2,8 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
-const multer = require("multer");
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
-const cloudinary = require("./cloudinaryconfig");
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -24,7 +22,7 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  photoUrl: { type: String, required: true },
+  photoUrl: { type: String },
 });
 
 const User = mongoose.model("User", userSchema);
@@ -40,92 +38,82 @@ app.use(
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Multer Setup for File Uploads
-const storage = multer.memoryStorage();
-const upload = multer({ storage });
-
-// Auth Routes
-// Signup Route
-app.post("/api/auth/signup", async (req, res) => {
+// Login Route
+app.post("/api/login", async (req, res) => {
   try {
-    const { name, email, password, photo } = req.body;
+    const { email, password } = req.body;
 
-    if (!name || !email || !password || !photo) {
-      return res.status(400).json({ message: "All fields are required." });
+    // Validate inputs
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required." });
     }
 
+    // Find user by email
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    // Check if the password matches
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: "Invalid credentials." });
+    }
+
+    res.status(200).json({ message: "Login successful!" });
+  } catch (error) {
+    console.error("Error in login route:", error);
+    res.status(500).json({ message: "Internal server error." });
+  }
+});
+
+// Signup Route
+app.post("/api/signup", async (req, res) => {
+  try {
+    const { name, email, password, photoUrl } = req.body;
+
+    // Validate inputs
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "Name, email, and password are required." });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ message: "Invalid email format." });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters long." });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: "Email is already registered." });
+    }
+
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // Create new user
     const newUser = new User({
       name,
       email,
       password: hashedPassword,
-      photoUrl: photo,
+      photoUrl,
     });
 
-    const savedUser = await newUser.save();
-
-    res.status(201).json({ message: "User signed up successfully!" });
+    await newUser.save();
+    res.status(201).json({ message: "User registered successfully!" });
   } catch (error) {
     console.error("Error in signup route:", error);
     res.status(500).json({ message: "Internal server error." });
   }
 });
 
-// Signup Route with File Upload (if needed)
-app.post("/api/signup", upload.single("photo"), async (req, res) => {
-  try {
-    const { name, email, password } = req.body;
-    const photo = req.file;
-
-    // Validate Inputs
-    if (!name || !email || !password || !photo) {
-      return res.status(400).json({ message: "All fields are required" });
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ message: "Invalid email format" });
-    }
-
-    if (password.length < 8) {
-      return res.status(400).json({ message: "Password must be at least 8 characters" });
-    }
-
-    // Check if User Already Exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: "Email is already registered" });
-    }
-
-    // Hash Password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Convert File to Base64
-    const photoBase64 = `data:${photo.mimetype};base64,${photo.buffer.toString("base64")}`;
-
-    // Upload Photo to Cloudinary
-    const cloudinaryResponse = await cloudinary.uploader.upload(photoBase64, {
-      folder: "user_photos", // Optional folder in Cloudinary
-    });
-
-    // Create New User
-    const newUser = new User({
-      name,
-      email,
-      password: hashedPassword,
-      photoUrl: cloudinaryResponse.secure_url, // Save Cloudinary URL
-    });
-
-    await newUser.save();
-    res.status(201).json({ message: "User registered successfully!" });
-  } catch (error) {
-    console.error("Error during signup:", error);
-    res.status(500).json({
-      message: "Internal server error",
-      error: error.message, // Include error details for debugging
-    });
-  }
+// Health Check Route (Optional)
+app.get("/api/health", (req, res) => {
+  res.status(200).json({ message: "API is up and running!" });
 });
 
 // Start Server
